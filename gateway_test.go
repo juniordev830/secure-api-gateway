@@ -27,3 +27,40 @@ func TestRejectsUnsafeSettings(t *testing.T) {
     u,_=url.Parse("http://127.0.0.1:9000")
     if _,err:=NewHandler(u,"weak");err==nil {t.Fatal("weak tokens rejected")}
 }
+
+func TestRequiresBearerScheme(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	upstream, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("a", 40)
+	handler, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name, header string
+		want         int
+	}{
+		{"raw token", token, http.StatusUnauthorized},
+		{"different scheme", "Basic " + token, http.StatusUnauthorized},
+		{"empty bearer token", "Bearer ", http.StatusUnauthorized},
+		{"case insensitive scheme", "bearer " + token, http.StatusNoContent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+			request.Header.Set("Authorization", tc.header)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tc.want {
+				t.Errorf("expected status %d, got %d", tc.want, response.Code)
+			}
+		})
+	}
+}
