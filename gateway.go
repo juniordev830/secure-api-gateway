@@ -45,8 +45,8 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             w.Write([]byte(`{"status":"ok"}`)); return
         }
         if !strings.HasPrefix(req.URL.Path, "/api/") { http.NotFound(w, req); return }
-        received := strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
-        if subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
+        scheme, received, ok := strings.Cut(req.Header.Get("Authorization"), " ")
+        if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
         ip, _, err := net.SplitHostPort(req.RemoteAddr); if err != nil { ip = req.RemoteAddr }
