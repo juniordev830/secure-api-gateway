@@ -12,6 +12,8 @@ import (
     "time"
 )
 
+const maxRequestBodyBytes int64 = 1 << 20
+
 type window struct { since time.Time; count int }
 type limiter struct { mu sync.Mutex; buckets map[string]window }
 func (l *limiter) allow(key string) bool {
@@ -49,6 +51,11 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
+        if req.ContentLength > maxRequestBodyBytes {
+            http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+            return
+        }
+        req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
         ip, _, err := net.SplitHostPort(req.RemoteAddr); if err != nil { ip = req.RemoteAddr }
         if !rl.allow(ip) { http.Error(w, "rate limited", http.StatusTooManyRequests); return }
         proxy.ServeHTTP(w, req)
