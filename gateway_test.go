@@ -28,6 +28,30 @@ func TestRejectsUnsafeSettings(t *testing.T) {
     if _,err:=NewHandler(u,"weak");err==nil {t.Fatal("weak tokens rejected")}
 }
 
+func TestRejectsOversizedRequestBody(t *testing.T) {
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil {
+        t.Fatal(err)
+    }
+    token := strings.Repeat("a", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil {
+        t.Fatal(err)
+    }
+    request := httptest.NewRequest(http.MethodPost, "/api/upload",
+        strings.NewReader(strings.Repeat("x", int(maxRequestBodyBytes+1))))
+    request.Header.Set("Authorization", "Bearer "+token)
+    response := httptest.NewRecorder()
+    handler.ServeHTTP(response, request)
+    if response.Code != http.StatusRequestEntityTooLarge {
+        t.Fatalf("expected 413, got %d", response.Code)
+    }
+}
+
 func TestRequiresBearerScheme(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
