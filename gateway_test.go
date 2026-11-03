@@ -88,3 +88,45 @@ func TestRequiresBearerScheme(t *testing.T) {
 		})
 	}
 }
+
+func TestDropsSpoofedForwardingHeaders(t *testing.T) {
+    expectedHost := ""
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if r.Host != expectedHost {
+            t.Errorf("upstream Host = %q; want %q", r.Host, expectedHost)
+        }
+        if got := r.Header.Get("X-Forwarded-For"); got != "192.0.2.1" {
+            t.Errorf("X-Forwarded-For = %q; want real client IP", got)
+        }
+        for _, key := range []string{
+            "Forwarded", "X-Forwarded-Host", "X-Forwarded-Proto",
+            "X-Forwarded-Port", "X-Forwarded-Server", "X-Real-IP",
+        } {
+            if got := r.Header.Get(key); got != "" {
+                t.Errorf("%s leaked: %q", key, got)
+            }
+        }
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    expectedHost = upstream.Host
+    token := strings.Repeat("a", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+    req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+    req.Host = "attacker.example"
+    req.Header.Set("Authorization", "Bearer " + token)
+    for _, key := range []string{
+        "Forwarded", "X-Forwarded-For", "X-Forwarded-Host",
+        "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Server", "X-Real-IP",
+    } {
+        req.Header.Set(key, "spoofed")
+    }
+    res := httptest.NewRecorder()
+    handler.ServeHTTP(res, req)
+    if res.Code != http.StatusNoContent {
+        t.Fatalf("unexpected status: %d", res.Code)
+    }
+}
