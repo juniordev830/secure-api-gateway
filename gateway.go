@@ -37,8 +37,18 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
     originalDirector := proxy.Director
     proxy.Director = func(req *http.Request) {
         originalDirector(req)
+        req.Host = upstream.Host // The upstream must never see a client-controlled Host.
         req.Header.Del("Authorization") // Never leak the gateway's token to upstream.
         req.Header.Del("Cookie")
+        // Prevent callers from impersonating another client or public origin.
+        // ReverseProxy adds a fresh X-Forwarded-For from req.RemoteAddr later.
+        for _, header := range []string{
+            "Forwarded", "X-Forwarded-For", "X-Forwarded-Host",
+            "X-Forwarded-Proto", "X-Forwarded-Port", "X-Forwarded-Server",
+            "X-Real-IP",
+        } {
+            req.Header.Del(header)
+        }
     }
     rl := &limiter{buckets: make(map[string]window)}
     return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
