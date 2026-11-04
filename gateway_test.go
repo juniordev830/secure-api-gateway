@@ -130,3 +130,48 @@ func TestDropsSpoofedForwardingHeaders(t *testing.T) {
         t.Fatalf("unexpected status: %d", res.Code)
     }
 }
+
+
+func TestRejectsAmbiguousAuthorizationHeaders(t *testing.T) {
+    hits := 0
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        hits++
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("a", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+
+    testCases := []struct{
+        name string
+        headers []string
+    }{
+        {"two headers", []string{"Bearer " + token, "Bearer " + strings.Repeat("b", 40)}},
+        {"combined headers", []string{"Bearer " + token + ", Bearer bad"}},
+        {"oversized header", []string{"Bearer " + strings.Repeat("x", 8193)}},
+    }
+    for _, tc := range testCases {
+        t.Run(tc.name, func(t *testing.T) {
+            req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+            for _, val := range tc.headers { req.Header.Add("Authorization", val) }
+            response := httptest.NewRecorder()
+            handler.ServeHTTP(response, req)
+            if response.Code != http.StatusUnauthorized {
+                t.Fatalf("expected 401; got %d", response.Code)
+            }
+        })
+    }
+    if hits != 0 {
+        t.Fatalf("upstream received %d rejected requests", hits)
+    }
+
+    valid := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+    valid.Header.Set("Authorization", "Bearer " + token)
+    response := httptest.NewRecorder()
+    handler.ServeHTTP(response, valid)
+    if response.Code != http.StatusNoContent { t.Fatalf("valid request got %d", response.Code) }
+    if hits != 1 { t.Fatalf("valid request was not forwarded") }
+}
