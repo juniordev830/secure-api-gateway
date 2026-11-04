@@ -24,6 +24,8 @@ O GitHub Actions executa os testes automaticamente em pushes e pull requests.
 
 ## Segurança e limitações
 
+Exige um único cabeçalho `Authorization: Bearer <token>` e rejeita cabeçalhos duplicados, valores combinados e valores excessivamente longos.
+
 Escuta somente em `127.0.0.1`. Remove tokens, cookies e cabeçalhos de encaminhamento recebidos do cliente; define o `Host` esperado do upstream e deixa o proxy gerar o `X-Forwarded-For` a partir do endereço remoto real. Não é gateway público pronto. O rate limiting é em memória e não funciona entre múltiplas réplicas.
 
 ## Evolução planejada
