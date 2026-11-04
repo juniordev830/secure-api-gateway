@@ -57,7 +57,14 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             w.Write([]byte(`{"status":"ok"}`)); return
         }
         if !strings.HasPrefix(req.URL.Path, "/api/") { http.NotFound(w, req); return }
-        scheme, received, ok := strings.Cut(req.Header.Get("Authorization"), " ")
+        // Reject ambiguous Authorization fields rather than accepting the first value.
+        authorization := req.Header.Values("Authorization")
+        if len(authorization) != 1 || len(authorization[0]) > 8192 ||
+            strings.ContainsAny(authorization[0], ",\r\n\t") {
+            http.Error(w, "unauthorized", http.StatusUnauthorized)
+            return
+        }
+        scheme, received, ok := strings.Cut(authorization[0], " ")
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
