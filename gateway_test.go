@@ -5,6 +5,7 @@ import (
     "net/url"
     "strings"
     "testing"
+    "sync/atomic"
 )
 func TestAuthorizedProxyAndHeaderIsolation(t *testing.T) {
     target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -133,9 +134,9 @@ func TestDropsSpoofedForwardingHeaders(t *testing.T) {
 
 
 func TestRejectsAmbiguousAuthorizationHeaders(t *testing.T) {
-    hits := 0
+    var hits atomic.Int32
     target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-        hits++
+        hits.Add(1)
         w.WriteHeader(http.StatusNoContent)
     }))
     defer target.Close()
@@ -164,8 +165,8 @@ func TestRejectsAmbiguousAuthorizationHeaders(t *testing.T) {
             }
         })
     }
-    if hits != 0 {
-        t.Fatalf("upstream received %d rejected requests", hits)
+    if hits.Load() != 0 {
+        t.Fatalf("upstream received %d rejected requests", hits.Load())
     }
 
     valid := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
@@ -173,5 +174,5 @@ func TestRejectsAmbiguousAuthorizationHeaders(t *testing.T) {
     response := httptest.NewRecorder()
     handler.ServeHTTP(response, valid)
     if response.Code != http.StatusNoContent { t.Fatalf("valid request got %d", response.Code) }
-    if hits != 1 { t.Fatalf("valid request was not forwarded") }
+    if hits.Load() != 1 { t.Fatalf("valid request was not forwarded") }
 }
