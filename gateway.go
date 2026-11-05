@@ -7,6 +7,7 @@ import (
     "net/http"
     "net/http/httputil"
     "net/url"
+    "path"
     "strings"
     "sync"
     "time"
@@ -74,6 +75,15 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             w.Write([]byte(`{"status":"ok"}`)); return
         }
         if !strings.HasPrefix(req.URL.Path, "/api/") { http.NotFound(w, req); return }
+        // A reverse proxy must not forward /api/../internal or encoded
+        // separators that the upstream might normalize into other routes.
+        // Check decoded Path; RawPath tracks an explicitly encoded slash.
+        if path.Clean(req.URL.Path) != req.URL.Path ||
+            strings.Contains(req.URL.Path, "\\") ||
+            strings.Contains(strings.ToLower(req.URL.RawPath), "%2f") {
+            http.Error(w, "non-canonical api path", http.StatusBadRequest)
+            return
+        }
         // Reject ambiguous Authorization fields rather than accepting the first value.
         authorization := req.Header.Values("Authorization")
         if len(authorization) != 1 || len(authorization[0]) > 8192 ||
