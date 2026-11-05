@@ -233,3 +233,50 @@ func TestRateLimiterBoundsMemoryWithoutEvictingActiveClients(t *testing.T) {
         t.Fatal("expired client was not removed")
     }
 }
+
+
+func TestRejectsPathTraversalAndEncodedSeparatorsBeforeProxy(t *testing.T) {
+    var forwarded atomic.Int32
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        forwarded.Add(1)
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("z", 40)
+    gateway, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+
+    unsafe := []string{
+        "/api/../admin", "/api/%2e%2e/admin", "/api/..%2fadmin",
+        "/api//../admin", "/api/%2F..%2Fadmin", "/api/x//y",
+        "/api/%5cadmin",
+    }
+    for _, requestPath := range unsafe {
+        t.Run(requestPath, func(t *testing.T) {
+            req := httptest.NewRequest(http.MethodGet, requestPath, nil)
+            req.Header.Set("Authorization", "Bearer " + token)
+            response := httptest.NewRecorder()
+            gateway.ServeHTTP(response, req)
+            if response.Code != http.StatusBadRequest {
+                t.Errorf("noncanonical %q returned HTTP %d; want 400", requestPath, response.Code)
+            }
+        })
+    }
+    if count := forwarded.Load(); count != 0 {
+        t.Fatalf("forwarded %d unsafe requests to upstream", count)
+    }
+    for _, safe := range []string{"/api/jobs", "/api/v1/items-123", "/api/resource%20name"} {
+        req := httptest.NewRequest(http.MethodGet, safe, nil)
+        req.Header.Set("Authorization", "Bearer " + token)
+        response := httptest.NewRecorder()
+        gateway.ServeHTTP(response, req)
+        if response.Code != http.StatusNoContent {
+            t.Errorf("valid path %q returned HTTP %d", safe, response.Code)
+        }
+    }
+    if count := forwarded.Load(); count != 3 {
+        t.Fatalf("forwarded %d legitimate requests; want 3", count)
+    }
+}
