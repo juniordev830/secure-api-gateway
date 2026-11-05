@@ -13,18 +13,35 @@ import (
 )
 
 const maxRequestBodyBytes int64 = 1 << 20
+const maxRateLimitClients = 4096
+const requestsPerMinute = 60
 
 type window struct { since time.Time; count int }
 type limiter struct { mu sync.Mutex; buckets map[string]window }
+
+// Keep rate-limit bookkeeping bounded. New client addresses cannot displace
+// active clients when the table is full. Expired buckets are recycled only
+// when required, avoiding a full map scan for every normal request.
 func (l *limiter) allow(key string) bool {
-    l.mu.Lock(); defer l.mu.Unlock()
+    l.mu.Lock()
+    defer l.mu.Unlock()
     now := time.Now()
-    for k, b := range l.buckets { if now.Sub(b.since) >= time.Minute { delete(l.buckets, k) } }
-    b, ok := l.buckets[key]
-    if !ok { b = window{since: now} }
-    if b.count >= 60 { return false }
-    b.count++
-    l.buckets[key] = b
+    if bucket, exists := l.buckets[key]; exists {
+        if now.Sub(bucket.since) >= time.Minute {
+            bucket = window{since: now}
+        }
+        if bucket.count >= requestsPerMinute { return false }
+        bucket.count++
+        l.buckets[key] = bucket
+        return true
+    }
+    if len(l.buckets) >= maxRateLimitClients {
+        for client, bucket := range l.buckets {
+            if now.Sub(bucket.since) >= time.Minute { delete(l.buckets, client) }
+        }
+        if len(l.buckets) >= maxRateLimitClients { return false }
+    }
+    l.buckets[key] = window{since: now, count: 1}
     return true
 }
 
