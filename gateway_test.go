@@ -6,6 +6,9 @@ import (
     "strings"
     "testing"
     "sync/atomic"
+    "strconv"
+    "sync"
+    "time"
 )
 func TestAuthorizedProxyAndHeaderIsolation(t *testing.T) {
     target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -175,4 +178,58 @@ func TestRejectsAmbiguousAuthorizationHeaders(t *testing.T) {
     handler.ServeHTTP(response, valid)
     if response.Code != http.StatusNoContent { t.Fatalf("valid request got %d", response.Code) }
     if hits.Load() != 1 { t.Fatalf("valid request was not forwarded") }
+}
+
+
+func TestRateLimitPerClientUnderConcurrency(t *testing.T) {
+    l := &limiter{buckets: make(map[string]window)}
+    const workers = 8
+    const requestsPerWorker = 15
+    var accepted atomic.Int32
+    var group sync.WaitGroup
+    for i := 0; i < workers; i++ {
+        group.Add(1)
+        go func() {
+            defer group.Done()
+            for j := 0; j < requestsPerWorker; j++ {
+                if l.allow("same-client") { accepted.Add(1) }
+            }
+        }()
+    }
+    group.Wait()
+    if got := accepted.Load(); got != requestsPerMinute {
+        t.Fatalf("accepted %d requests; limit is %d", got, requestsPerMinute)
+    }
+    if len(l.buckets) != 1 {
+        t.Fatalf("unexpected bucket count: %d", len(l.buckets))
+    }
+}
+
+func TestRateLimiterBoundsMemoryWithoutEvictingActiveClients(t *testing.T) {
+    l := &limiter{buckets: make(map[string]window)}
+    for i := 0; i < maxRateLimitClients; i++ {
+        if !l.allow("client-" + strconv.Itoa(i)) {
+            t.Fatalf("rejected client %d before reaching capacity", i)
+        }
+    }
+    if l.allow("overflow-client") {
+        t.Fatal("new client must be rejected when bucket capacity is full")
+    }
+    if len(l.buckets) != maxRateLimitClients {
+        t.Fatalf("unbounded limiter: %d buckets", len(l.buckets))
+    }
+    if !l.allow("client-0") {
+        t.Fatal("known client should not be evicted by new addresses")
+    }
+
+    l.buckets["client-1"] = window{since: time.Now().Add(-2 * time.Minute), count: requestsPerMinute}
+    if !l.allow("fresh-client") {
+        t.Fatal("expired buckets should be reclaimed when capacity is full")
+    }
+    if len(l.buckets) > maxRateLimitClients {
+        t.Fatal("reclaiming stale clients exceeded bucket capacity")
+    }
+    if _, exists := l.buckets["client-1"]; exists {
+        t.Fatal("expired client was not removed")
+    }
 }
