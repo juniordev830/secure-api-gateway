@@ -33,13 +33,16 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
     if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
         return nil, errors.New("upstream must be a fixed local HTTP URL")
     }
-    proxy := httputil.NewSingleHostReverseProxy(upstream)
-    originalDirector := proxy.Director
-    proxy.Director = func(req *http.Request) {
-        originalDirector(req)
-        req.Header.Del("Authorization") // Never leak the gateway's token to upstream.
-        req.Header.Del("Cookie")
-    }
+    // Rewrite discards untrusted X-Forwarded-* headers before deriving trusted
+    // forwarding metadata from the actual incoming request.
+    proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+        pr.SetURL(upstream)
+        pr.Out.Header.Del("Authorization") // Never leak the gateway token.
+        pr.Out.Header.Del("Cookie")
+        pr.Out.Header.Del("Forwarded")
+        pr.Out.Header.Del("X-Real-IP")
+        pr.SetXForwarded()
+    }}
     rl := &limiter{buckets: make(map[string]window)}
     return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
         if req.URL.Path == "/health" && req.Method == http.MethodGet {
