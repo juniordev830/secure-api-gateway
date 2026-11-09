@@ -138,3 +138,32 @@ func TestProxyIgnoresSpoofedForwardingHeaders(t *testing.T) {
         t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
     }
 }
+
+func TestRejectsDuplicateAuthorizationHeaders(t *testing.T) {
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        t.Error("ambiguous Authorization headers must not reach upstream")
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("a", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+
+    for _, headers := range [][]string{
+        {"Bearer " + token, "Bearer " + token},
+        {"Bearer " + token, "Basic attacker"},
+        {"Basic attacker", "Bearer " + token},
+    } {
+        request := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+        for _, header := range headers {
+            request.Header.Add("Authorization", header)
+        }
+        response := httptest.NewRecorder()
+        handler.ServeHTTP(response, request)
+        if response.Code != http.StatusUnauthorized {
+            t.Errorf("expected 401 for %v, got %d", headers, response.Code)
+        }
+    }
+}
