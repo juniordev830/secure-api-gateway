@@ -1,6 +1,6 @@
 # Secure API Gateway
 
-Gateway HTTP em Go com proxy reverso para um **upstream local e fixo**, token obrigatório e limite simples de 60 requisições/minuto por IP. A rota `/health` é pública e `/api/*` exige `Authorization: Bearer TOKEN`.
+Gateway HTTP em Go com proxy reverso para um **upstream local e fixo**, token obrigatório e limite simples de 60 requisições/minuto por IP. A rota `/health` é pública e `/api/*` exige exatamente um cabeçalho `Authorization: Bearer TOKEN`; requisições com múltiplos valores de autorização são rejeitadas.
 
 ## Estado
 
