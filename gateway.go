@@ -50,7 +50,13 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             w.Write([]byte(`{"status":"ok"}`)); return
         }
         if !strings.HasPrefix(req.URL.Path, "/api/") { http.NotFound(w, req); return }
-        scheme, received, ok := strings.Cut(req.Header.Get("Authorization"), " ")
+        // Reject duplicate Authorization values; Header.Get only reads the first.
+        authorizations := req.Header.Values("Authorization")
+        if len(authorizations) != 1 {
+            http.Error(w, "unauthorized", http.StatusUnauthorized)
+            return
+        }
+        scheme, received, ok := strings.Cut(authorizations[0], " ")
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
