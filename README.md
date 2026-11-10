@@ -1,6 +1,6 @@
 # Secure API Gateway
 
-Gateway HTTP em Go com proxy reverso para um **upstream local e fixo**, token obrigatório e limite simples de 60 requisições/minuto por IP. A rota `/health` é pública e `/api/*` exige `Authorization: Bearer TOKEN`.
+Gateway HTTP em Go com proxy reverso para um **upstream local e fixo**, token obrigatório e limite simples de 60 requisições/minuto por IP. A rota `/health` é pública e `/api/*` exige exatamente um cabeçalho `Authorization: Bearer TOKEN`; requisições com múltiplos valores de autorização são rejeitadas.
 
 ## Estado
 
@@ -24,7 +24,7 @@ O GitHub Actions executa os testes automaticamente em pushes e pull requests.
 
 ## Segurança e limitações
 
-Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos; não é gateway público pronto. O rate limiting é em memória e não funciona entre múltiplas réplicas.
+Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos. Descarta valores de `Forwarded`, `X-Real-IP` e `X-Forwarded-*` enviados pelo cliente e reconstrói os cabeçalhos `X-Forwarded-*` com base na conexão recebida, evitando falsificação da origem pelo próprio cliente. Não é gateway público pronto. Se implantado atrás de outro proxy, o IP registrado será o do proxy anterior, não necessariamente o do usuário final. O rate limiting é em memória e não funciona entre múltiplas réplicas.
 
 ## Evolução planejada
 

@@ -88,3 +88,82 @@ func TestRequiresBearerScheme(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyIgnoresSpoofedForwardingHeaders(t *testing.T) {
+    upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+        if got := req.Header.Get("Authorization"); got != "" {
+            t.Errorf("secret leaked to upstream: %q", got)
+        }
+        if got := req.Header.Get("Cookie"); got != "" {
+            t.Errorf("cookie leaked to upstream: %q", got)
+        }
+        if got := req.Header.Get("Forwarded"); got != "" {
+            t.Errorf("untrusted Forwarded leaked: %q", got)
+        }
+        if got := req.Header.Get("X-Real-IP"); got != "" {
+            t.Errorf("untrusted X-Real-IP leaked: %q", got)
+        }
+        if got := req.Header.Get("X-Forwarded-For"); got != "192.0.2.1" {
+            t.Errorf("forwarded client IP should be the socket peer, got %q", got)
+        }
+        if got := req.Header.Get("X-Forwarded-Host"); got != "gateway.example" {
+            t.Errorf("expected true incoming Host, got %q", got)
+        }
+        if got := req.Header.Get("X-Forwarded-Proto"); got != "http" {
+            t.Errorf("expected true scheme, got %q", got)
+        }
+        if req.URL.Path != "/api/jobs" || req.URL.RawQuery != "limit=3" {
+            t.Errorf("unexpected proxied URL %s", req.URL.String())
+        }
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer upstreamServer.Close()
+    upstream, err := url.Parse(upstreamServer.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("b", 40)
+    gateway, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+    request := httptest.NewRequest(http.MethodGet, "http://gateway.example/api/jobs?limit=3", nil)
+    request.RemoteAddr = "192.0.2.1:1234"
+    request.Header.Set("Authorization", "Bearer "+token)
+    request.Header.Set("Cookie", "session=secret")
+    request.Header.Set("Forwarded", "for=203.0.113.10;proto=https")
+    request.Header.Set("X-Real-IP", "203.0.113.10")
+    request.Header.Set("X-Forwarded-For", "203.0.113.10")
+    request.Header.Set("X-Forwarded-Host", "attacker.example")
+    request.Header.Set("X-Forwarded-Proto", "https")
+    response := httptest.NewRecorder()
+    gateway.ServeHTTP(response, request)
+    if response.Code != http.StatusNoContent {
+        t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
+    }
+}
+
+func TestRejectsDuplicateAuthorizationHeaders(t *testing.T) {
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        t.Error("ambiguous Authorization headers must not reach upstream")
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("a", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+
+    for _, headers := range [][]string{
+        {"Bearer " + token, "Bearer " + token},
+        {"Bearer " + token, "Basic attacker"},
+        {"Basic attacker", "Bearer " + token},
+    } {
+        request := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+        for _, header := range headers {
+            request.Header.Add("Authorization", header)
+        }
+        response := httptest.NewRecorder()
+        handler.ServeHTTP(response, request)
+        if response.Code != http.StatusUnauthorized {
+            t.Errorf("expected 401 for %v, got %d", headers, response.Code)
+        }
+    }
+}
