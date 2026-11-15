@@ -230,3 +230,26 @@ func TestLimiterReclaimsExpiredBucketsDuringCleanup(t *testing.T) {
         t.Fatal("expired bucket should be removed during cleanup")
     }
 }
+
+func TestProxyDoesNotForwardProxyAuthorization(t *testing.T) {
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if got := r.Header.Get("Proxy-Authorization"); got != "" {
+            t.Errorf("client proxy credentials reached upstream: %q", got)
+        }
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("p", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+    req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+    req.Header.Set("Authorization", "Bearer "+token)
+    req.Header.Set("Proxy-Authorization", "Basic client-proxy-credential")
+    response := httptest.NewRecorder()
+    handler.ServeHTTP(response, req)
+    if response.Code != http.StatusNoContent {
+        t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
+    }
+}
