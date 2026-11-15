@@ -1,55 +1,80 @@
 package gateway
+
 import (
-    "net/http"
-    "net/http/httptest"
-    "net/url"
-    "strings"
-    "testing"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
 )
+
 func TestAuthorizedProxyAndHeaderIsolation(t *testing.T) {
-    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        if r.Header.Get("Authorization") != "" { t.Error("gateway secret leaked upstream") }
-        if r.Header.Get("Cookie") != "" { t.Error("cookie leaked upstream") }
-        w.WriteHeader(204)
-    })); defer target.Close()
-    u,_ := url.Parse(target.URL)
-    token := strings.Repeat("a", 40)
-    h,err := NewHandler(u,token); if err!=nil {t.Fatal(err)}
-    unauth:=httptest.NewRecorder(); h.ServeHTTP(unauth,httptest.NewRequest("GET","/api/jobs",nil))
-    if unauth.Code!=401 {t.Fatalf("expected 401; got %d",unauth.Code)}
-    req:=httptest.NewRequest("GET","/api/jobs",nil); req.Header.Set("Authorization","Bearer "+token);req.Header.Set("Cookie","session=secret")
-    ok:=httptest.NewRecorder(); h.ServeHTTP(ok,req)
-    if ok.Code!=204 {t.Fatalf("expected 204; got %d",ok.Code)}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Error("gateway secret leaked upstream")
+		}
+		if r.Header.Get("Cookie") != "" {
+			t.Error("cookie leaked upstream")
+		}
+		w.WriteHeader(204)
+	}))
+	defer target.Close()
+	u, _ := url.Parse(target.URL)
+	token := strings.Repeat("a", 40)
+	h, err := NewHandler(u, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauth := httptest.NewRecorder()
+	h.ServeHTTP(unauth, httptest.NewRequest("GET", "/api/jobs", nil))
+	if unauth.Code != 401 {
+		t.Fatalf("expected 401; got %d", unauth.Code)
+	}
+	req := httptest.NewRequest("GET", "/api/jobs", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Cookie", "session=secret")
+	ok := httptest.NewRecorder()
+	h.ServeHTTP(ok, req)
+	if ok.Code != 204 {
+		t.Fatalf("expected 204; got %d", ok.Code)
+	}
 }
+
 func TestRejectsUnsafeSettings(t *testing.T) {
-    u,_:=url.Parse("https://example.com")
-    if _,err:=NewHandler(u,strings.Repeat("x",40));err==nil {t.Fatal("public upstream must be rejected")}
-    u,_=url.Parse("http://127.0.0.1:9000")
-    if _,err:=NewHandler(u,"weak");err==nil {t.Fatal("weak tokens rejected")}
+	u, _ := url.Parse("https://example.com")
+	if _, err := NewHandler(u, strings.Repeat("x", 40)); err == nil {
+		t.Fatal("public upstream must be rejected")
+	}
+	u, _ = url.Parse("http://127.0.0.1:9000")
+	if _, err := NewHandler(u, "weak"); err == nil {
+		t.Fatal("weak tokens rejected")
+	}
 }
 
 func TestRejectsOversizedRequestBody(t *testing.T) {
-    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-        w.WriteHeader(http.StatusNoContent)
-    }))
-    defer target.Close()
-    upstream, err := url.Parse(target.URL)
-    if err != nil {
-        t.Fatal(err)
-    }
-    token := strings.Repeat("a", 40)
-    handler, err := NewHandler(upstream, token)
-    if err != nil {
-        t.Fatal(err)
-    }
-    request := httptest.NewRequest(http.MethodPost, "/api/upload",
-        strings.NewReader(strings.Repeat("x", int(maxRequestBodyBytes+1))))
-    request.Header.Set("Authorization", "Bearer "+token)
-    response := httptest.NewRecorder()
-    handler.ServeHTTP(response, request)
-    if response.Code != http.StatusRequestEntityTooLarge {
-        t.Fatalf("expected 413, got %d", response.Code)
-    }
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	upstream, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("a", 40)
+	handler, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/upload",
+		strings.NewReader(strings.Repeat("x", int(maxRequestBodyBytes+1))))
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", response.Code)
+	}
 }
 
 func TestRequiresBearerScheme(t *testing.T) {
@@ -90,88 +115,149 @@ func TestRequiresBearerScheme(t *testing.T) {
 }
 
 func TestProxyIgnoresSpoofedForwardingHeaders(t *testing.T) {
-    upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-        if got := req.Header.Get("Authorization"); got != "" {
-            t.Errorf("secret leaked to upstream: %q", got)
-        }
-        if got := req.Header.Get("Cookie"); got != "" {
-            t.Errorf("cookie leaked to upstream: %q", got)
-        }
-        if got := req.Header.Get("Forwarded"); got != "" {
-            t.Errorf("untrusted Forwarded leaked: %q", got)
-        }
-        if got := req.Header.Get("X-Real-IP"); got != "" {
-            t.Errorf("untrusted X-Real-IP leaked: %q", got)
-        }
-        if got := req.Header.Get("X-Forwarded-User"); got != "" {
-            t.Errorf("untrusted identity header leaked: %q", got)
-        }
-        if got := req.Header.Get("X-Forwarded-Prefix"); got != "" {
-            t.Errorf("untrusted routing header leaked: %q", got)
-        }
-        if got := req.Header.Get("X-Forwarded-For"); got != "192.0.2.1" {
-            t.Errorf("forwarded client IP should be the socket peer, got %q", got)
-        }
-        if got := req.Header.Get("X-Forwarded-Host"); got != "gateway.example" {
-            t.Errorf("expected true incoming Host, got %q", got)
-        }
-        if got := req.Header.Get("X-Forwarded-Proto"); got != "http" {
-            t.Errorf("expected true scheme, got %q", got)
-        }
-        if req.URL.Path != "/api/jobs" || req.URL.RawQuery != "limit=3" {
-            t.Errorf("unexpected proxied URL %s", req.URL.String())
-        }
-        w.WriteHeader(http.StatusNoContent)
-    }))
-    defer upstreamServer.Close()
-    upstream, err := url.Parse(upstreamServer.URL)
-    if err != nil { t.Fatal(err) }
-    token := strings.Repeat("b", 40)
-    gateway, err := NewHandler(upstream, token)
-    if err != nil { t.Fatal(err) }
-    request := httptest.NewRequest(http.MethodGet, "http://gateway.example/api/jobs?limit=3", nil)
-    request.RemoteAddr = "192.0.2.1:1234"
-    request.Header.Set("Authorization", "Bearer "+token)
-    request.Header.Set("Cookie", "session=secret")
-    request.Header.Set("Forwarded", "for=203.0.113.10;proto=https")
-    request.Header.Set("X-Real-IP", "203.0.113.10")
-    request.Header.Set("X-Forwarded-For", "203.0.113.10")
-    request.Header.Set("X-Forwarded-Host", "attacker.example")
-    request.Header.Set("X-Forwarded-Proto", "https")
-    request.Header.Set("X-Forwarded-User", "admin")
-    request.Header.Set("X-Forwarded-Prefix", "/admin")
-    response := httptest.NewRecorder()
-    gateway.ServeHTTP(response, request)
-    if response.Code != http.StatusNoContent {
-        t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
-    }
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Errorf("secret leaked to upstream: %q", got)
+		}
+		if got := req.Header.Get("Cookie"); got != "" {
+			t.Errorf("cookie leaked to upstream: %q", got)
+		}
+		if got := req.Header.Get("Forwarded"); got != "" {
+			t.Errorf("untrusted Forwarded leaked: %q", got)
+		}
+		if got := req.Header.Get("X-Real-IP"); got != "" {
+			t.Errorf("untrusted X-Real-IP leaked: %q", got)
+		}
+		if got := req.Header.Get("X-Forwarded-User"); got != "" {
+			t.Errorf("untrusted identity header leaked: %q", got)
+		}
+		if got := req.Header.Get("X-Forwarded-Prefix"); got != "" {
+			t.Errorf("untrusted routing header leaked: %q", got)
+		}
+		if got := req.Header.Get("X-Forwarded-For"); got != "192.0.2.1" {
+			t.Errorf("forwarded client IP should be the socket peer, got %q", got)
+		}
+		if got := req.Header.Get("X-Forwarded-Host"); got != "gateway.example" {
+			t.Errorf("expected true incoming Host, got %q", got)
+		}
+		if got := req.Header.Get("X-Forwarded-Proto"); got != "http" {
+			t.Errorf("expected true scheme, got %q", got)
+		}
+		if req.URL.Path != "/api/jobs" || req.URL.RawQuery != "limit=3" {
+			t.Errorf("unexpected proxied URL %s", req.URL.String())
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstreamServer.Close()
+	upstream, err := url.Parse(upstreamServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("b", 40)
+	gateway, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://gateway.example/api/jobs?limit=3", nil)
+	request.RemoteAddr = "192.0.2.1:1234"
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Cookie", "session=secret")
+	request.Header.Set("Forwarded", "for=203.0.113.10;proto=https")
+	request.Header.Set("X-Real-IP", "203.0.113.10")
+	request.Header.Set("X-Forwarded-For", "203.0.113.10")
+	request.Header.Set("X-Forwarded-Host", "attacker.example")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-User", "admin")
+	request.Header.Set("X-Forwarded-Prefix", "/admin")
+	response := httptest.NewRecorder()
+	gateway.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestRejectsDuplicateAuthorizationHeaders(t *testing.T) {
-    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        t.Error("ambiguous Authorization headers must not reach upstream")
-        w.WriteHeader(http.StatusNoContent)
-    }))
-    defer target.Close()
-    upstream, err := url.Parse(target.URL)
-    if err != nil { t.Fatal(err) }
-    token := strings.Repeat("a", 40)
-    handler, err := NewHandler(upstream, token)
-    if err != nil { t.Fatal(err) }
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("ambiguous Authorization headers must not reach upstream")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	upstream, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.Repeat("a", 40)
+	handler, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-    for _, headers := range [][]string{
-        {"Bearer " + token, "Bearer " + token},
-        {"Bearer " + token, "Basic attacker"},
-        {"Basic attacker", "Bearer " + token},
-    } {
-        request := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
-        for _, header := range headers {
-            request.Header.Add("Authorization", header)
-        }
-        response := httptest.NewRecorder()
-        handler.ServeHTTP(response, request)
-        if response.Code != http.StatusUnauthorized {
-            t.Errorf("expected 401 for %v, got %d", headers, response.Code)
-        }
-    }
+	for _, headers := range [][]string{
+		{"Bearer " + token, "Bearer " + token},
+		{"Bearer " + token, "Basic attacker"},
+		{"Basic attacker", "Bearer " + token},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+		for _, header := range headers {
+			request.Header.Add("Authorization", header)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 for %v, got %d", headers, response.Code)
+		}
+	}
+}
+
+func TestLimiterBoundsDistinctClientBuckets(t *testing.T) {
+	now := time.Now()
+	buckets := make(map[string]window, maxRateLimitBuckets)
+	for i := 0; i < maxRateLimitBuckets; i++ {
+		buckets[fmt.Sprintf("client-%d", i)] = window{since: now, count: 1}
+	}
+	limiter := &limiter{buckets: buckets, lastCleanup: now}
+
+	if limiter.allow("new-client") {
+		t.Fatal("new client must be rejected when the bucket map is at capacity")
+	}
+	if got := len(limiter.buckets); got != maxRateLimitBuckets {
+		t.Fatalf("bucket map grew beyond its configured limit: got %d", got)
+	}
+}
+
+func TestLimiterReusesExpiredBucketAtCapacity(t *testing.T) {
+	now := time.Now()
+	buckets := make(map[string]window, maxRateLimitBuckets)
+	for i := 0; i < maxRateLimitBuckets; i++ {
+		buckets[fmt.Sprintf("client-%d", i)] = window{since: now, count: 1}
+	}
+	buckets["client-0"] = window{since: now.Add(-rateLimitWindow), count: 60}
+	limiter := &limiter{buckets: buckets, lastCleanup: now}
+
+	if !limiter.allow("client-0") {
+		t.Fatal("an expired client bucket should be reusable at capacity")
+	}
+	if got := limiter.buckets["client-0"].count; got != 1 {
+		t.Fatalf("expired bucket should start a fresh window with count 1, got %d", got)
+	}
+	if got := len(limiter.buckets); got != maxRateLimitBuckets {
+		t.Fatalf("reusing an expired bucket should not change map size, got %d", got)
+	}
+}
+
+func TestLimiterReclaimsExpiredBucketsDuringCleanup(t *testing.T) {
+	now := time.Now()
+	limiter := &limiter{
+		buckets: map[string]window{
+			"expired-client": {since: now.Add(-rateLimitWindow), count: 60},
+		},
+		lastCleanup: now.Add(-rateLimitCleanupInterval),
+	}
+
+	if !limiter.allow("new-client") {
+		t.Fatal("new client should be accepted after expired buckets are reclaimed")
+	}
+	if _, exists := limiter.buckets["expired-client"]; exists {
+		t.Fatal("expired bucket should be removed during cleanup")
+	}
 }
