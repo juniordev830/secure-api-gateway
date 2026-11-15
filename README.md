@@ -24,13 +24,18 @@ O GitHub Actions executa os testes automaticamente em pushes e pull requests.
 
 ## Segurança e limitações
 
-Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos. Descarta `Forwarded`, `X-Real-IP` e todos os `X-Forwarded-*` enviados pelo cliente, inclusive campos não padronizados de identidade e roteamento; recria apenas `X-Forwarded-For`, `X-Forwarded-Host` e `X-Forwarded-Proto` com dados da conexão. O upstream não deve usar cabeçalhos de identidade não autenticados como substitutos de autorização. Não é gateway público pronto. Se implantado atrás de outro proxy, o IP registrado será o do proxy anterior, não necessariamente o do usuário final. O rate limiting é em memória e não funciona entre múltiplas réplicas.
+Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos. Descarta `Forwarded`, `X-Real-IP` e todos os `X-Forwarded-*` enviados pelo cliente, inclusive campos não padronizados de identidade e roteamento; recria apenas `X-Forwarded-For`, `X-Forwarded-Host` e `X-Forwarded-Proto` com dados da conexão. O upstream não deve usar cabeçalhos de identidade não autenticados como substitutos de autorização.
+
+O limitador mantém no máximo **4.096 buckets por processo**. Novos endereços recebem `429` quando esse limite está cheio; entradas expiradas são removidas em uma rotina de limpeza periódica (intervalo de 30 segundos), e a janela individual é reiniciada após um minuto. Esse comportamento evita crescimento ilimitado do mapa, mas é deliberadamente *fail-closed*: em um pico com muitas origens distintas, novos clientes podem ser temporariamente recusados. O rate limiting permanece em memória, por processo, e não coordena múltiplas réplicas.
+
+Não é gateway público pronto. Se implantado atrás de outro proxy, o IP registrado será o do proxy anterior, não necessariamente o do usuário final.
 
 ## Evolução planejada
 
 Adicionar roteamento configurável com allowlist, quotas distribuídas, TLS e observabilidade, antes de implantar em rede.
 
 ---
+
 Projeto de Engenharia de Software mantido na conta [juniordev830](https://github.com/juniordev830).
 
 ## Verificação antes de contribuir
