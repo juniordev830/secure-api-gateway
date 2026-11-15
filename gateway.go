@@ -41,6 +41,14 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         pr.Out.Header.Del("Cookie")
         pr.Out.Header.Del("Forwarded")
         pr.Out.Header.Del("X-Real-IP")
+        // ReverseProxy removes the standard forwarding trio, but custom
+        // X-Forwarded-* values may still be copied from the client. An
+        // upstream must never mistake those values for gateway assertions.
+        for name := range pr.Out.Header {
+            if strings.HasPrefix(strings.ToLower(name), "x-forwarded-") {
+                delete(pr.Out.Header, name)
+            }
+        }
         pr.SetXForwarded()
     }}
     rl := &limiter{buckets: make(map[string]window)}
