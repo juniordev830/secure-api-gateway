@@ -103,6 +103,12 @@ func TestProxyIgnoresSpoofedForwardingHeaders(t *testing.T) {
         if got := req.Header.Get("X-Real-IP"); got != "" {
             t.Errorf("untrusted X-Real-IP leaked: %q", got)
         }
+        if got := req.Header.Get("X-Forwarded-User"); got != "" {
+            t.Errorf("untrusted identity header leaked: %q", got)
+        }
+        if got := req.Header.Get("X-Forwarded-Prefix"); got != "" {
+            t.Errorf("untrusted routing header leaked: %q", got)
+        }
         if got := req.Header.Get("X-Forwarded-For"); got != "192.0.2.1" {
             t.Errorf("forwarded client IP should be the socket peer, got %q", got)
         }
@@ -132,6 +138,8 @@ func TestProxyIgnoresSpoofedForwardingHeaders(t *testing.T) {
     request.Header.Set("X-Forwarded-For", "203.0.113.10")
     request.Header.Set("X-Forwarded-Host", "attacker.example")
     request.Header.Set("X-Forwarded-Proto", "https")
+    request.Header.Set("X-Forwarded-User", "admin")
+    request.Header.Set("X-Forwarded-Prefix", "/admin")
     response := httptest.NewRecorder()
     gateway.ServeHTTP(response, request)
     if response.Code != http.StatusNoContent {

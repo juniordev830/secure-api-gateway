@@ -24,7 +24,7 @@ O GitHub Actions executa os testes automaticamente em pushes e pull requests.
 
 ## Segurança e limitações
 
-Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos. Descarta valores de `Forwarded`, `X-Real-IP` e `X-Forwarded-*` enviados pelo cliente e reconstrói os cabeçalhos `X-Forwarded-*` com base na conexão recebida, evitando falsificação da origem pelo próprio cliente. Não é gateway público pronto. Se implantado atrás de outro proxy, o IP registrado será o do proxy anterior, não necessariamente o do usuário final. O rate limiting é em memória e não funciona entre múltiplas réplicas.
+Escuta somente em `127.0.0.1`. Remove tokens e cookies ao encaminhar pedidos. Descarta `Forwarded`, `X-Real-IP` e todos os `X-Forwarded-*` enviados pelo cliente, inclusive campos não padronizados de identidade e roteamento; recria apenas `X-Forwarded-For`, `X-Forwarded-Host` e `X-Forwarded-Proto` com dados da conexão. O upstream não deve usar cabeçalhos de identidade não autenticados como substitutos de autorização. Não é gateway público pronto. Se implantado atrás de outro proxy, o IP registrado será o do proxy anterior, não necessariamente o do usuário final. O rate limiting é em memória e não funciona entre múltiplas réplicas.
 
 ## Evolução planejada
 
