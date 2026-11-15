@@ -75,6 +75,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
     proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
         pr.SetURL(upstream)
         pr.Out.Header.Del("Authorization") // Never leak the gateway token.
+        pr.Out.Header.Del("Proxy-Authorization") // Do not forward client proxy credentials.
         pr.Out.Header.Del("Cookie")
         pr.Out.Header.Del("Forwarded")
         pr.Out.Header.Del("X-Real-IP")
