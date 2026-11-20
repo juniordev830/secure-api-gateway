@@ -12,19 +12,56 @@ import (
     "time"
 )
 
-const maxRequestBodyBytes int64 = 1 << 20
+const (
+    maxRequestBodyBytes int64 = 1 << 20
+    rateLimitWindow = time.Minute
+    rateLimitCleanupInterval = 30 * time.Second
+    maxRateLimitBuckets = 4096
+)
 
 type window struct { since time.Time; count int }
-type limiter struct { mu sync.Mutex; buckets map[string]window }
+type limiter struct {
+    mu sync.Mutex
+    buckets map[string]window
+    lastCleanup time.Time
+}
+
 func (l *limiter) allow(key string) bool {
-    l.mu.Lock(); defer l.mu.Unlock()
+    l.mu.Lock()
+    defer l.mu.Unlock()
+
     now := time.Now()
-    for k, b := range l.buckets { if now.Sub(b.since) >= time.Minute { delete(l.buckets, k) } }
-    b, ok := l.buckets[key]
-    if !ok { b = window{since: now} }
-    if b.count >= 60 { return false }
-    b.count++
-    l.buckets[key] = b
+    if l.buckets == nil {
+        l.buckets = make(map[string]window)
+    }
+
+    // Prune stale entries periodically instead of scanning the map on every request.
+    if l.lastCleanup.IsZero() || now.Sub(l.lastCleanup) >= rateLimitCleanupInterval {
+        for client, bucket := range l.buckets {
+            if now.Sub(bucket.since) >= rateLimitWindow {
+                delete(l.buckets, client)
+            }
+        }
+        l.lastCleanup = now
+    }
+
+    bucket, exists := l.buckets[key]
+    if !exists {
+        // Fail closed when full: do not allocate unbounded state for unique source IPs.
+        if len(l.buckets) >= maxRateLimitBuckets {
+            return false
+        }
+        bucket = window{since: now}
+    } else if now.Sub(bucket.since) >= rateLimitWindow {
+        // Reuse this client's expired slot even if global cleanup is not due.
+        bucket = window{since: now}
+    }
+
+    if bucket.count >= 60 {
+        return false
+    }
+    bucket.count++
+    l.buckets[key] = bucket
     return true
 }
 
@@ -38,6 +75,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
     proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
         pr.SetURL(upstream)
         pr.Out.Header.Del("Authorization") // Never leak the gateway token.
+        pr.Out.Header.Del("Proxy-Authorization") // Do not forward client proxy credentials.
         pr.Out.Header.Del("Cookie")
         pr.Out.Header.Del("Forwarded")
         pr.Out.Header.Del("X-Real-IP")
