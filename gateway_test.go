@@ -1,10 +1,12 @@
 package gateway
 import (
+    "fmt"
     "net/http"
     "net/http/httptest"
     "net/url"
     "strings"
     "testing"
+    "time"
 )
 func TestAuthorizedProxyAndHeaderIsolation(t *testing.T) {
     target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -173,5 +175,81 @@ func TestRejectsDuplicateAuthorizationHeaders(t *testing.T) {
         if response.Code != http.StatusUnauthorized {
             t.Errorf("expected 401 for %v, got %d", headers, response.Code)
         }
+    }
+}
+
+func TestLimiterBoundsDistinctClientBuckets(t *testing.T) {
+    now := time.Now()
+    buckets := make(map[string]window, maxRateLimitBuckets)
+    for i := 0; i < maxRateLimitBuckets; i++ {
+        buckets[fmt.Sprintf("client-%d", i)] = window{since: now, count: 1}
+    }
+    limiter := &limiter{buckets: buckets, lastCleanup: now}
+
+    if limiter.allow("new-client") {
+        t.Fatal("new client must be rejected when the bucket map is at capacity")
+    }
+    if got := len(limiter.buckets); got != maxRateLimitBuckets {
+        t.Fatalf("bucket map grew beyond its configured limit: got %d", got)
+    }
+}
+
+func TestLimiterReusesExpiredBucketAtCapacity(t *testing.T) {
+    now := time.Now()
+    buckets := make(map[string]window, maxRateLimitBuckets)
+    for i := 0; i < maxRateLimitBuckets; i++ {
+        buckets[fmt.Sprintf("client-%d", i)] = window{since: now, count: 1}
+    }
+    buckets["client-0"] = window{since: now.Add(-rateLimitWindow), count: 60}
+    limiter := &limiter{buckets: buckets, lastCleanup: now}
+
+    if !limiter.allow("client-0") {
+        t.Fatal("an expired client bucket should be reusable at capacity")
+    }
+    if got := limiter.buckets["client-0"].count; got != 1 {
+        t.Fatalf("expired bucket should start a fresh window with count 1, got %d", got)
+    }
+    if got := len(limiter.buckets); got != maxRateLimitBuckets {
+        t.Fatalf("reusing an expired bucket should not change map size, got %d", got)
+    }
+}
+
+func TestLimiterReclaimsExpiredBucketsDuringCleanup(t *testing.T) {
+    now := time.Now()
+    limiter := &limiter{
+        buckets: map[string]window{
+            "expired-client": {since: now.Add(-rateLimitWindow), count: 60},
+        },
+        lastCleanup: now.Add(-rateLimitCleanupInterval),
+    }
+
+    if !limiter.allow("new-client") {
+        t.Fatal("new client should be accepted after expired buckets are reclaimed")
+    }
+    if _, exists := limiter.buckets["expired-client"]; exists {
+        t.Fatal("expired bucket should be removed during cleanup")
+    }
+}
+
+func TestProxyDoesNotForwardProxyAuthorization(t *testing.T) {
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        if got := r.Header.Get("Proxy-Authorization"); got != "" {
+            t.Errorf("client proxy credentials reached upstream: %q", got)
+        }
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, err := url.Parse(target.URL)
+    if err != nil { t.Fatal(err) }
+    token := strings.Repeat("p", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+    req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+    req.Header.Set("Authorization", "Bearer "+token)
+    req.Header.Set("Proxy-Authorization", "Basic client-proxy-credential")
+    response := httptest.NewRecorder()
+    handler.ServeHTTP(response, req)
+    if response.Code != http.StatusNoContent {
+        t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
     }
 }
