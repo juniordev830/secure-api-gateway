@@ -2,7 +2,7 @@
 
 ## Escopo existente
 
-Reverse proxy Go com upstream fixo local, autenticação Bearer e limite simples de requisições por IP.
+Reverse proxy Go com upstream fixo local, autenticação Bearer e limite por IP com capacidade de memória limitada.
 
 ## Código e testes
 
@@ -16,11 +16,14 @@ Ao alterar funcionalidade, registrar no PR os comandos executados e os resultado
 
 ## Cenários a incluir na regressão
 
-Testar múltiplos Authorization, rota protegida sem token, carga alta, cabeçalhos repassados, upstream indisponível e IP spoofado.
+- Múltiplos cabeçalhos `Authorization` e rota protegida sem token.
+- Carga alta e saturação dos 4.096 buckets, sem crescimento adicional do mapa.
+- Reutilização de bucket expirado e limpeza periódica de entradas antigas.
+- Cabeçalhos encaminhados, upstream indisponível e IP spoofado.
 
 ## Riscos e evolução
 
-Limite por IP não substitui proteção distribuída. Antes de produção, revisar timeouts, limites de payload, TLS, confiança no proxy e observabilidade.
+O limite de buckets evita crescimento ilimitado de memória, mas pode recusar novos IPs com `429` enquanto o mapa estiver cheio. O rate limiting é em memória e por processo; não substitui proteção distribuída. Antes de produção, revisar timeouts, limites de payload, TLS, confiança no proxy e observabilidade.
 
 ### Checklist de entrega
 
