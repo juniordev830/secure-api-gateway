@@ -253,3 +253,40 @@ func TestProxyDoesNotForwardProxyAuthorization(t *testing.T) {
         t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
     }
 }
+
+func TestGatewayTokenRejectsControlCharactersAndExcessiveLength(t *testing.T) {
+    upstream, _ := url.Parse("http://127.0.0.1:9000")
+    for _, token := range []string{
+        strings.Repeat("a", 31), strings.Repeat("a", 4097),
+        " " + strings.Repeat("a", 40), strings.Repeat("a", 40) + "\n",
+    } {
+        if _, err := NewHandler(upstream, token); err == nil {
+            t.Fatalf("invalid secret length=%d accepted", len(token))
+        }
+    }
+    if _, err := NewHandler(upstream, strings.Repeat("z", 32)); err != nil {
+        t.Fatalf("valid minimum token rejected: %v", err)
+    }
+}
+
+func TestUnknownLengthOversizedBodyDoesNotReachUpstream(t *testing.T) {
+    reached := false
+    target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        reached = true
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer target.Close()
+    upstream, _ := url.Parse(target.URL)
+    token := strings.Repeat("q", 40)
+    handler, err := NewHandler(upstream, token)
+    if err != nil { t.Fatal(err) }
+    request := httptest.NewRequest(http.MethodPost, "/api/upload",
+        strings.NewReader(strings.Repeat("x", int(maxRequestBodyBytes)+1)))
+    request.ContentLength = -1
+    request.Header.Set("Authorization", "Bearer "+token)
+    response := httptest.NewRecorder()
+    handler.ServeHTTP(response, request)
+    if response.Code != http.StatusRequestEntityTooLarge || reached {
+        t.Fatalf("expected 413 before proxy: code=%d reached=%v", response.Code, reached)
+    }
+}

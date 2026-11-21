@@ -3,6 +3,8 @@ package gateway
 import (
     "crypto/subtle"
     "errors"
+    "bytes"
+    "io"
     "net"
     "net/http"
     "net/http/httputil"
@@ -66,7 +68,10 @@ func (l *limiter) allow(key string) bool {
 }
 
 func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
-    if len(token) < 32 { return nil, errors.New("GATEWAY_TOKEN requires 32+ characters") }
+    if len(token) < 32 || len(token) > 4096 || strings.TrimSpace(token) != token ||
+        strings.IndexFunc(token, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
+        return nil, errors.New("GATEWAY_TOKEN must have 32-4096 characters without controls or edge whitespace")
+    }
     if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
         return nil, errors.New("upstream must be a fixed local HTTP URL")
     }
@@ -110,7 +115,19 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
             return
         }
-        req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
+        // Reject oversized chunked/unknown-length bodies before proxying any bytes.
+        // Otherwise an upstream could receive a partial request before MaxBytesReader fails.
+        body, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
+        if err != nil {
+            http.Error(w, "invalid request body", http.StatusBadRequest)
+            return
+        }
+        if int64(len(body)) > maxRequestBodyBytes {
+            http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+            return
+        }
+        req.Body = io.NopCloser(bytes.NewReader(body))
+        req.ContentLength = int64(len(body))
         ip, _, err := net.SplitHostPort(req.RemoteAddr); if err != nil { ip = req.RemoteAddr }
         if !rl.allow(ip) { http.Error(w, "rate limited", http.StatusTooManyRequests); return }
         proxy.ServeHTTP(w, req)
