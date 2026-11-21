@@ -253,3 +253,18 @@ func TestProxyDoesNotForwardProxyAuthorization(t *testing.T) {
         t.Fatalf("expected 204, got %d: %s", response.Code, response.Body.String())
     }
 }
+
+func TestGatewayTokenRejectsControlCharactersAndExcessiveLength(t *testing.T) {
+    upstream, _ := url.Parse("http://127.0.0.1:9000")
+    for _, token := range []string{
+        strings.Repeat("a", 31), strings.Repeat("a", 4097),
+        " " + strings.Repeat("a", 40), strings.Repeat("a", 40) + "\n",
+    } {
+        if _, err := NewHandler(upstream, token); err == nil {
+            t.Fatalf("invalid secret length=%d accepted", len(token))
+        }
+    }
+    if _, err := NewHandler(upstream, strings.Repeat("z", 32)); err != nil {
+        t.Fatalf("valid minimum token rejected: %v", err)
+    }
+}
