@@ -115,7 +115,19 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
             return
         }
-        req.Body = http.MaxBytesReader(w, req.Body, maxRequestBodyBytes)
+        // Reject oversized chunked/unknown-length bodies before proxying any bytes.
+        // Otherwise an upstream could receive a partial request before MaxBytesReader fails.
+        body, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
+        if err != nil {
+            http.Error(w, "invalid request body", http.StatusBadRequest)
+            return
+        }
+        if int64(len(body)) > maxRequestBodyBytes {
+            http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+            return
+        }
+        req.Body = io.NopCloser(bytes.NewReader(body))
+        req.ContentLength = int64(len(body))
         ip, _, err := net.SplitHostPort(req.RemoteAddr); if err != nil { ip = req.RemoteAddr }
         if !rl.allow(ip) { http.Error(w, "rate limited", http.StatusTooManyRequests); return }
         proxy.ServeHTTP(w, req)
