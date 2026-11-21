@@ -41,3 +41,5 @@ Projeto de Engenharia de Software mantido na conta [juniordev830](https://github
 ## Verificação antes de contribuir
 
 O [guia de validação](docs/GUIA_DE_VALIDACAO.md) descreve o estado do código, as verificações reproduzíveis e os riscos a observar ao revisar novas alterações.
+
+O token de gateway deve ter de 32 a 4.096 caracteres, sem espaços nas extremidades nem controles. O proxy verifica integralmente o corpo antes de enviá-lo ao upstream: mesmo em requisições chunked ou sem `Content-Length`, um corpo acima de 1 MiB recebe HTTP 413 sem envio parcial ao serviço local.
