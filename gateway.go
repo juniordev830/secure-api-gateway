@@ -108,6 +108,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             return
         }
         scheme, received, ok := strings.Cut(authorizations[0], " ")
+        received = strings.TrimLeft(received, " ")
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
