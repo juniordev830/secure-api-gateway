@@ -72,7 +72,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         strings.IndexFunc(token, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
         return nil, errors.New("GATEWAY_TOKEN must have 32-4096 characters without controls or edge whitespace")
     }
-    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
+    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && !strings.EqualFold(upstream.Hostname(), "localhost")) || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
         return nil, errors.New("upstream must be a fixed local HTTP URL")
     }
     // Rewrite discards untrusted X-Forwarded-* headers before deriving trusted
