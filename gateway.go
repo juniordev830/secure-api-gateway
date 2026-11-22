@@ -117,10 +117,14 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         }
         // Reject oversized chunked/unknown-length bodies before proxying any bytes.
         // Otherwise an upstream could receive a partial request before MaxBytesReader fails.
-        body, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
-        if err != nil {
-            http.Error(w, "invalid request body", http.StatusBadRequest)
-            return
+        var body []byte
+        if req.Body != nil {
+            var err error
+            body, err = io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
+            if err != nil {
+                http.Error(w, "invalid request body", http.StatusBadRequest)
+                return
+            }
         }
         if int64(len(body)) > maxRequestBodyBytes {
             http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
