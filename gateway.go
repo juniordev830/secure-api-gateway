@@ -72,7 +72,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         strings.IndexFunc(token, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
         return nil, errors.New("GATEWAY_TOKEN must have 32-4096 characters without controls or edge whitespace")
     }
-    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
+    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && !strings.EqualFold(upstream.Hostname(), "localhost")) || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
         return nil, errors.New("upstream must be a fixed local HTTP URL")
     }
     // Rewrite discards untrusted X-Forwarded-* headers before deriving trusted
@@ -108,6 +108,7 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
             return
         }
         scheme, received, ok := strings.Cut(authorizations[0], " ")
+        received = strings.TrimLeft(received, " ")
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
@@ -117,10 +118,14 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         }
         // Reject oversized chunked/unknown-length bodies before proxying any bytes.
         // Otherwise an upstream could receive a partial request before MaxBytesReader fails.
-        body, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
-        if err != nil {
-            http.Error(w, "invalid request body", http.StatusBadRequest)
-            return
+        var body []byte
+        if req.Body != nil {
+            var err error
+            body, err = io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes+1))
+            if err != nil {
+                http.Error(w, "invalid request body", http.StatusBadRequest)
+                return
+            }
         }
         if int64(len(body)) > maxRequestBodyBytes {
             http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
