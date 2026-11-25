@@ -290,3 +290,29 @@ func TestUnknownLengthOversizedBodyDoesNotReachUpstream(t *testing.T) {
         t.Fatalf("expected 413 before proxy: code=%d reached=%v", response.Code, reached)
     }
 }
+
+func TestValidatedUpstreamCannotBeChangedByCaller(t *testing.T) {
+    original := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        w.WriteHeader(http.StatusNoContent)
+    }))
+    defer original.Close()
+    changed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+        t.Error("mutated URL redirected a validated gateway")
+        w.WriteHeader(http.StatusBadGateway)
+    }))
+    defer changed.Close()
+    u, _ := url.Parse(original.URL)
+    next, _ := url.Parse(changed.URL)
+    token := strings.Repeat("a", 40)
+    h, err := NewHandler(u, token)
+    if err != nil { t.Fatal(err) }
+    *u = *next
+    req := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+    req.Header.Set("Authorization", "Bearer "+token)
+    res := httptest.NewRecorder()
+    h.ServeHTTP(res, req)
+    if res.Code != http.StatusNoContent { t.Fatalf("expected 204, got %d", res.Code) }
+    unauth := httptest.NewRecorder()
+    h.ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "/api/test", nil))
+    if unauth.Header().Get("WWW-Authenticate") != "Bearer" { t.Fatal("missing authentication challenge") }
+}
