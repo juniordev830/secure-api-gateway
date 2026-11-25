@@ -72,13 +72,16 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         strings.IndexFunc(token, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
         return nil, errors.New("GATEWAY_TOKEN must have 32-4096 characters without controls or edge whitespace")
     }
-    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
+    if upstream == nil || upstream.Scheme != "http" || (upstream.Hostname() != "127.0.0.1" && upstream.Hostname() != "localhost") || upstream.User != nil || upstream.RawQuery != "" || upstream.ForceQuery || upstream.Fragment != "" || upstream.Opaque != "" {
         return nil, errors.New("upstream must be a fixed local HTTP URL")
     }
+    // Own an immutable copy of the validated target; caller mutation must not
+    // redirect requests after validation.
+    fixedUpstream := *upstream
     // Rewrite discards untrusted X-Forwarded-* headers before deriving trusted
     // forwarding metadata from the actual incoming request.
     proxy := &httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
-        pr.SetURL(upstream)
+        pr.SetURL(&fixedUpstream)
         pr.Out.Header.Del("Authorization") // Never leak the gateway token.
         pr.Out.Header.Del("Proxy-Authorization") // Do not forward client proxy credentials.
         pr.Out.Header.Del("Cookie")
@@ -104,11 +107,13 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         // Reject duplicate Authorization values; Header.Get only reads the first.
         authorizations := req.Header.Values("Authorization")
         if len(authorizations) != 1 {
+            w.Header().Set("WWW-Authenticate", "Bearer")
             http.Error(w, "unauthorized", http.StatusUnauthorized)
             return
         }
         scheme, received, ok := strings.Cut(authorizations[0], " ")
         if !ok || !strings.EqualFold(scheme, "Bearer") || subtle.ConstantTimeCompare([]byte(received), []byte(token)) != 1 {
+            w.Header().Set("WWW-Authenticate", "Bearer")
             http.Error(w, "unauthorized", http.StatusUnauthorized); return
         }
         if req.ContentLength > maxRequestBodyBytes {
@@ -129,7 +134,10 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
         req.Body = io.NopCloser(bytes.NewReader(body))
         req.ContentLength = int64(len(body))
         ip, _, err := net.SplitHostPort(req.RemoteAddr); if err != nil { ip = req.RemoteAddr }
-        if !rl.allow(ip) { http.Error(w, "rate limited", http.StatusTooManyRequests); return }
+        if !rl.allow(ip) {
+            w.Header().Set("Retry-After", "60")
+            http.Error(w, "rate limited", http.StatusTooManyRequests); return
+        }
         proxy.ServeHTTP(w, req)
     }), nil
 }
