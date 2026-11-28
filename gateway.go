@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"errors"
 	"io"
@@ -179,7 +180,9 @@ func NewHandler(upstream *url.URL, token string) (http.Handler, error) {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return
 		}
-		forwarded := req.Clone(req.Context())
+		upstreamContext, cancel := context.WithTimeout(req.Context(), 45*time.Second)
+		defer cancel()
+		forwarded := req.Clone(upstreamContext)
 		forwarded.Body = http.NoBody
 		if len(body) > 0 {
 			forwarded.Body = io.NopCloser(bytes.NewReader(body))

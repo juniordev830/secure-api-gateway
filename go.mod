@@ -1,3 +1,3 @@
 module example.com/secure-api-gateway
 
-go 1.22
+go 1.26.11
