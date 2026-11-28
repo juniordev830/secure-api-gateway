@@ -1,6 +1,7 @@
 package gateway
 import (
     "fmt"
+    "io"
     "net/http"
     "net/http/httptest"
     "net/url"
@@ -289,4 +290,66 @@ func TestUnknownLengthOversizedBodyDoesNotReachUpstream(t *testing.T) {
     if response.Code != http.StatusRequestEntityTooLarge || reached {
         t.Fatalf("expected 413 before proxy: code=%d reached=%v", response.Code, reached)
     }
+}
+
+type observedBody struct{ read bool }
+
+func (body *observedBody) Read(_ []byte) (int, error) {
+	body.read = true
+	return 0, io.EOF
+}
+
+func (*observedBody) Close() error { return nil }
+
+func TestLimitsRequestsBeforeReadingBody(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+	upstream, _ := url.Parse(target.URL)
+	token := strings.Repeat("a", 40)
+	handler, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 60; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/api/jobs", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("request %d returned %d", i, response.Code)
+		}
+	}
+	body := &observedBody{}
+	req := httptest.NewRequest(http.MethodPost, "/api/jobs", body)
+	req.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusTooManyRequests || body.read {
+		t.Fatalf("expected 429 and an unread body, got status %d, read %t", response.Code, body.read)
+	}
+}
+
+func TestRejectsNonCanonicalRoutes(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("noncanonical path reached the upstream")
+	}))
+	defer target.Close()
+	upstream, _ := url.Parse(target.URL)
+	token := strings.Repeat("a", 40)
+	handler, err := NewHandler(upstream, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range []string{"/api/../health", "/api/jobs//list", "/api/jobs%2Flist", "/api/jobs%5Clist"} {
+		req := httptest.NewRequest(http.MethodGet, route, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		if response.Code != http.StatusBadRequest {
+			t.Errorf("%s returned %d", route, response.Code)
+		}
+	}
 }
